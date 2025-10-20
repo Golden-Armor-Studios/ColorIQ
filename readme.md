@@ -62,6 +62,16 @@ We’re always excited to work with designers, artists, and fellow engineers who
    - Screenshots / GIFs if visuals are impacted.
    - Test notes (device, resolution, etc.).
 
+## Git LFS
+
+To keep art assets versioned efficiently, install Git LFS and track the high-resolution imagery:
+
+```bash
+$ git lfs install
+$ git lfs track "Docs/readme-*.png"
+$ git add .gitattributes
+```
+
 ## Project Structure (Highlights)
 
 ```
@@ -72,6 +82,7 @@ Assets/
  └─ Plugins/iOS/            # Native share sheet bridge
 Docs/
  └─ readme-*.png            # README imagery
+Creative/                   # LFS-tracked project art, video, and After Effects sources
 ```
 
 ## Roadmap Ideas
