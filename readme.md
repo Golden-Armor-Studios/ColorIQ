@@ -1,8 +1,11 @@
 # Color IQ – Rise Through the Spectrum
 
-<img src="Docs/readme2.png" width="200" />
-<img src="Docs/readme1.png" width="200" />
-<img src="Docs/readme3.png" width="200" />
+<p align="center">
+  <img src="Docs/readme2.png" width="200" />
+  <img src="Docs/readme3.png" width="200" />
+  <img src="Docs/readme1.png" width="200" />
+</p>
+
 
 Color IQ is a fast–paced color perception challenge built with Unity. Match target hues, chase the leaderboard, and share your score with the world. This repository contains the production project for the Golden Armor Studio mobile release.
 
