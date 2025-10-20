@@ -1,30 +1,20 @@
-using NUnit.Framework.Constraints;
 using UnityEngine;
-using System.Collections;
-using System;
 using System.Collections.Generic;
-using Unity.VisualScripting;
 
 public class GameBoard
 {
     public int GameBoardHeight;
     public int GameBoardWidth;
 
-    private MonoBehaviour _coroutineHost;
-    
     public List<Color> colorList = new List<Color>();
 
     public Color selectedColor;
-
-    private int selectedColorId;
 
     public GameObject SelectedColorIndicator;
 
     private Color tempColor;
 
-    public int score;
-
-    private float time;
+    public int score = 0;
 
     private int level;
 
@@ -37,18 +27,28 @@ public class GameBoard
     private AudioSource LevelUp;
     private GameObject VideoBackground;
     private SpriteRenderer VideoBackgroundSR;
-    private GameObject SpawnPoint;
     private float gamePieceSize;
     private int gamePieceCount;
     private float gamePieceRadius;
-    
+    public delegate void setTimeDelegate(float timeAdded);
+    private readonly List<GameObject> spawnedPieces = new List<GameObject>();
+    private int bonusTileIndex = -1;
 
-    private GameObject[] GamePieces;
+    private const float CorrectPieceRatio = 0.15f;
+    private const int MinimumCorrectPieces = 2;
+    private const float MinHueContrast = 0.25f;
+    private const float MaxHueContrast = 0.5f;
+    private const float MaxPieceSize = 0.72f;
+    private const float MinPieceSize = 0.34f;
+    private const float PieceRadiusScale = 0.45f;
+    private const float DifficultyRampSpan = 8f;
+
     public GameBoard (MonoBehaviour host) {
-        _coroutineHost = host;
+        bonusTileIndex = -1;
         GameBoardHeight = 800;
         GameBoardWidth = 600;
         level = 2;
+        gamePieceCount = 40;
         CorrectPointObject = GameObject.Find("DTSound-Correct_Point");
         InccorectPointObject = GameObject.Find("DTSound-Incorrect_Point");
         LevelUpObject = GameObject.Find("DTSound-Level-Up");
@@ -65,156 +65,338 @@ public class GameBoard
         float scaleY = worldScreenHeight / spriteHeight;
         VideoBackgroundSR.transform.localScale = new Vector3(scaleX, scaleY, 1);
         VideoBackgroundSR.transform.position = new Vector3(0, -5, 1);
-        SpawnPoint = GameObject.Find("SpawnPoint");
     }
 
     public void buildGameBoard(bool isTheSameColor = false) {
+        DestroySpawnedPieces();
+        bonusTileIndex = -1;
+
         colorList = new List<Color>();
-        int currentX = 170;
-        levelColor = UnityEngine.Random.ColorHSV(0f, 1f, 1f, 1f, .5f, 1f);
+        bool usePastelPalette = ShouldUsePastelPalette(score);
+        Color targetColor = isTheSameColor ? levelColor : GenerateTargetColor(usePastelPalette);
+        levelColor = targetColor;
 
-        switch(level) {
-            case 1: {
-                gamePieceSize = 0.7f;
-                gamePieceCount = 40;
-                gamePieceRadius = 0.4f;
-                break;
-            }
-            case 2: {
-                gamePieceSize = 0.6f;
-                gamePieceCount = 50;
-                gamePieceRadius = 0.4f;
-                break;
-            }
-            case 3: {
-                gamePieceSize = 0.5f;
-                gamePieceCount = 70;
-                gamePieceRadius = 0.34f;
-                break;
-            }
-            case 4: {
-                gamePieceSize = 0.4f;
-                gamePieceCount = 80;
-                gamePieceRadius = 0.32f;
-                break;
-            }
-            case 5: {
-                gamePieceSize = 0.3f;
-                gamePieceCount = 120;
-                gamePieceRadius = 0.28f;
-                break;
-            }
-            case 6: {
-                gamePieceSize = 0.2f;
-                gamePieceCount = 160;
-                gamePieceRadius = 0.23f;
-                break;
-            }
-            default: {
-                gamePieceSize = 0.1f;
-                gamePieceCount = 170;
-                gamePieceRadius = 0.19f;
-                break;
+        ApplyDifficultyScaling(level, isTheSameColor);
+
+        Rect playArea = CalculatePlayableArea();
+        float stepX = gamePieceSize;
+        float stepY = gamePieceSize;
+
+        int columns = Mathf.Max(1, Mathf.FloorToInt(playArea.width / stepX));
+        int rows = Mathf.Max(1, Mathf.FloorToInt(playArea.height / stepY));
+
+        if (columns < 1) {
+            columns = 1;
+        }
+        if (rows < 1) {
+            rows = 1;
+        }
+
+        float totalWidth = gamePieceSize + (columns - 1) * stepX;
+        float totalHeight = gamePieceSize + (rows - 1) * stepY;
+
+        float startX = playArea.xMin + (playArea.width - totalWidth) * 0.5f + gamePieceSize * 0.5f;
+        float startY = playArea.yMin + (playArea.height - totalHeight) * 0.5f + gamePieceSize * 0.5f;
+
+        List<Vector3> gridPositions = new List<Vector3>(rows * columns);
+        for (int row = 0; row < rows; row++) {
+            for (int column = 0; column < columns; column++) {
+                gridPositions.Add(new Vector3(
+                    startX + column * stepX,
+                    startY + row * stepY,
+                    0f
+                ));
             }
         }
 
+        gamePieceCount = gridPositions.Count;
 
-        for (int i = 0; i < gamePieceCount; i++)
-        {   
-           Vector3 position = SpawnPoint.transform.position;
-           tempColor = isTheSameColor == false ? UnityEngine.Random.ColorHSV(0f, 1f, 1f, 1f, .5f, 1f) : levelColor;
+        int correctPiecesTarget = isTheSameColor
+            ? gamePieceCount
+            : Mathf.Clamp(Mathf.RoundToInt(gamePieceCount * CorrectPieceRatio), MinimumCorrectPieces, gamePieceCount);
+
+        HashSet<int> correctPieceIndices = isTheSameColor
+            ? BuildSequentialIndexSet(gamePieceCount)
+            : BuildRandomIndexSet(gamePieceCount, correctPiecesTarget);
+
+        for (int index = 0; index < gamePieceCount; index++) {
+            bool shouldUseTargetColor = isTheSameColor || correctPieceIndices.Contains(index);
+
+            tempColor = shouldUseTargetColor
+                ? targetColor
+                : GenerateContrastingColor(targetColor, usePastelPalette);
+
             colorList.Add(tempColor);
-            new ColorGamePiece(position, tempColor, level, gamePieceSize, gamePieceRadius).Render();
+
+            GameObject piece = new ColorGamePiece(gridPositions[index], tempColor, level, gamePieceSize, gamePieceRadius, false).Render();
+            spawnedPieces.Add(piece);
         }
 
-
-        selectedColorId = UnityEngine.Random.Range(0, colorList.Count);
-        selectedColor = colorList[selectedColorId];
+        selectedColor = targetColor;
         SelectedColorIndicator = GameObject.Find("SelectedColor");
         SpriteRenderer SelectedColorSR = SelectedColorIndicator.GetComponent<SpriteRenderer>();
         SelectedColorSR.color = selectedColor;
     }
 
-    public void ShotGunEffect(string name, RaycastHit2D hit) {
-        float radius = 1f;
-            Collider2D[] hitColliders = Physics2D.OverlapCircleAll(hit.point, radius);
-            foreach (Collider2D collider in hitColliders)
-            {
-                if (collider.gameObject.tag == "GamePiece") {
+    private void ApplyDifficultyScaling(int currentLevel, bool isUniformBoard) {
+        float normalizedLevel = Mathf.Clamp01((currentLevel - 1f) / DifficultyRampSpan);
+
+        float baseSize = Mathf.Lerp(MaxPieceSize, MinPieceSize, normalizedLevel);
+        float boardModifier = isUniformBoard ? 0.95f : 1f;
+
+        gamePieceSize = Mathf.Clamp(baseSize * boardModifier, MinPieceSize, MaxPieceSize);
+        float calculatedRadius = gamePieceSize * PieceRadiusScale;
+        gamePieceRadius = Mathf.Clamp(calculatedRadius, gamePieceSize * 0.35f, gamePieceSize * 0.5f);
+    }
+
+    private Rect CalculatePlayableArea() {
+        Camera mainCamera = Camera.main;
+        if (mainCamera == null) {
+            return new Rect(-GameBoardWidth * 0.5f, -GameBoardHeight * 0.5f, GameBoardWidth, GameBoardHeight);
+        }
+
+        Vector3 cameraPosition = mainCamera.transform.position;
+        float halfHeight = mainCamera.orthographicSize;
+        float halfWidth = halfHeight * mainCamera.aspect;
+
+        float left = cameraPosition.x - halfWidth;
+        float right = cameraPosition.x + halfWidth;
+        float top = cameraPosition.y + halfHeight;
+        float bottom = cameraPosition.y - halfHeight;
+
+        float bottomLimit = bottom;
+
+        GameObject indicator = GameObject.Find("SelectedColor");
+        if (indicator != null) {
+            SpriteRenderer indicatorRenderer = indicator.GetComponent<SpriteRenderer>();
+            if (indicatorRenderer != null) {
+                bottomLimit = Mathf.Max(bottomLimit, indicatorRenderer.bounds.max.y);
+            }
+        }
+
+        const float padding = 0.25f;
+        const float topUiMargin = 1.5f;
+        const float bottomUiMargin = 0.75f;
+        float playableLeft = left + padding;
+        float playableRight = right - padding;
+        float playableTop = top - padding - topUiMargin;
+        float playableBottom = bottomLimit + padding + bottomUiMargin;
+
+        if (playableRight <= playableLeft) {
+            playableRight = playableLeft + 1f;
+        }
+        if (playableTop <= playableBottom) {
+            playableTop = playableBottom + 1f;
+        }
+
+        return Rect.MinMaxRect(playableLeft, playableBottom, playableRight, playableTop);
+    }
+
+    public void addPoints(string name, RaycastHit2D hit, setTimeDelegate setTime) {
+        GameObject touchedPiece = hit.collider != null ? hit.collider.gameObject : null;
+        if (!IsGamePiece(touchedPiece)) {
+            return;
+        }
+
+        bool isBonusPiece = touchedPiece.CompareTag("GamePiece_Level_2");
+        bool touchedCorrect = selectedColor.ToColorKey() == touchedPiece.name;
+
+        if (!isBonusPiece && !touchedCorrect) {
+            ProcessIncorrectSelection();
+            return;
+        }
+
+        touchedPiece.SetActive(false);
+        if (isBonusPiece) {
+            bonusTileIndex = -1;
+        }
+
+        if (level >= 2 && touchedCorrect) {
+            Collider2D[] hitColliders = Physics2D.OverlapCircleAll(hit.point, 1f);
+            foreach (Collider2D collider in hitColliders) {
+                if (!IsGamePiece(collider.gameObject)) {
+                    continue;
+                }
+
+                if (selectedColor.ToColorKey() == collider.gameObject.name) {
                     collider.gameObject.SetActive(false);
                 }
             }
-            foreach (Collider2D collider in hitColliders)
-            {
-                if (collider.gameObject.tag == "GamePiece") {
-                    if (selectedColor.ToHexString() == collider.gameObject.name) {
-                        score++;
-                        // time isnt adding yet.
-                        time += 10.00f;
-                        CorrectPoint.Play();
-                        if (score % 10 == 0) {
-                            level++;
-                            LevelUp.Play();
-                            VideoBackgroundSR.transform.position = new Vector3(0, -5, 1);
-                            removeGamePieces();
-                            buildGameBoard(true);
-                        } else {
-                            VideoBackgroundSR.transform.position = new Vector3(0, VideoBackgroundSR.transform.position.y + 0.5f , 1);
-                            removeGamePieces();
-                            buildGameBoard();
-                        }
-                    }
-                }
+        }
+
+        CorrectPoint.Play();
+        score++;
+        if (isBonusPiece) {
+            setTime(10.0f);
+        }
+        if (score % 10 == 0) {
+            level++;
+            LevelUp.Play();
+            setTime(30.0f);
+            VideoBackgroundSR.transform.position = new Vector3(0, -5, 1);
+            removeGamePieces();
+            buildGameBoard(true);
+        } else {
+            VideoBackgroundSR.transform.position = new Vector3(0, VideoBackgroundSR.transform.position.y + 0.5f , 1);
+            removeGamePieces();
+            buildGameBoard();
+        }
+    }
+        
+
+    public bool SpawnBonusTile() {
+        if (spawnedPieces.Count == 0) {
+            return false;
+        }
+
+        if (bonusTileIndex >= 0) {
+            GameObject existing = spawnedPieces[bonusTileIndex];
+            if (existing != null && existing.activeSelf && existing.CompareTag("GamePiece_Level_2")) {
+                return false;
             }
-            IncorrectPoint.Play();
+            bonusTileIndex = -1;
+        }
+
+        List<int> candidates = new List<int>();
+        for (int i = 0; i < spawnedPieces.Count; i++) {
+            GameObject piece = spawnedPieces[i];
+            if (piece == null) {
+                continue;
+            }
+            if (!piece.activeSelf) {
+                continue;
+            }
+            if (piece.CompareTag("GamePiece_Level_2")) {
+                continue;
+            }
+            candidates.Add(i);
+        }
+
+        if (candidates.Count == 0) {
+            return false;
+        }
+
+        int targetIndex = candidates[UnityEngine.Random.Range(0, candidates.Count)];
+        GameObject oldPiece = spawnedPieces[targetIndex];
+        if (oldPiece == null) {
+            return false;
+        }
+
+        Vector3 position = oldPiece.transform.position;
+        Color pieceColor = selectedColor;
+
+        Object.Destroy(oldPiece);
+
+        GameObject bonusPiece = new ColorGamePiece(position, pieceColor, level, gamePieceSize, gamePieceRadius, true).Render();
+        spawnedPieces[targetIndex] = bonusPiece;
+        if (targetIndex < colorList.Count) {
+            colorList[targetIndex] = pieceColor;
+        }
+
+        Animator animator = bonusPiece.GetComponent<Animator>();
+        if (animator != null) {
+            animator.SetTrigger("AddLevel2");
+        }
+
+        bonusTileIndex = targetIndex;
+        return true;
     }
 
-    public void addPoints(string name, RaycastHit2D hit) {
-            if (level >= 2) {
-                ShotGunEffect(name, hit);
-            }
-            if (level == 1) {
-                if (selectedColor.ToHexString() == name) {
-                    CorrectPoint.Play();
-                    score++;
-                    time += 10.00f;
-                    if (score % 10 == 0) {
-                        level++;
-                        LevelUp.Play();
-                        VideoBackgroundSR.transform.position = new Vector3(0, -5, 1);
-                        removeGamePieces();
-                        buildGameBoard(true);
-                    } else {
-                        VideoBackgroundSR.transform.position = new Vector3(0, VideoBackgroundSR.transform.position.y + 0.5f , 1);
-                        removeGamePieces();
-                        buildGameBoard();
-                    }
-                } else {
-                    IncorrectPoint.Play();
-                    removeGamePieces();
-                    buildGameBoard();
-                }
-            }
+    public bool HasActiveBonusTile() {
+        if (bonusTileIndex < 0) {
+            return false;
         }
-        
+        if (bonusTileIndex >= spawnedPieces.Count) {
+            bonusTileIndex = -1;
+            return false;
+        }
+        GameObject piece = spawnedPieces[bonusTileIndex];
+        if (piece == null || !piece.activeSelf) {
+            bonusTileIndex = -1;
+            return false;
+        }
+        return true;
+    }
 
 
     public void removeGamePieces() {
-        GamePieces = GameObject.FindGameObjectsWithTag("GamePiece");
-        foreach( GameObject gamePiece in GamePieces) {
-            GameObject.Destroy(gamePiece);
-        }
-    }
-
-    public void setTime(float timer){
-        time = timer;
-    }
-
-    public float getTime(){
-        return time;
+        DestroySpawnedPieces();
     }
 
     public int getScore() {
         return score;
+    }
+
+    private void ProcessIncorrectSelection() {
+        IncorrectPoint.Play();
+        removeGamePieces();
+        buildGameBoard();
+    }
+
+    private void DestroySpawnedPieces() {
+        foreach (GameObject piece in spawnedPieces) {
+            if (piece != null) {
+                Object.Destroy(piece);
+            }
+        }
+        spawnedPieces.Clear();
+        bonusTileIndex = -1;
+    }
+
+    private bool IsGamePiece(GameObject obj) {
+        return obj != null && (obj.CompareTag("GamePiece") || obj.CompareTag("GamePiece_Level_2"));
+    }
+
+    private bool ShouldUsePastelPalette(int currentScore) {
+        if (currentScore <= 0) {
+            return false;
+        }
+        return (currentScore / 5) % 2 == 1;
+    }
+
+    private Color GenerateTargetColor(bool usePastelPalette) {
+        float hue = UnityEngine.Random.Range(0f, 1f);
+        float saturation = usePastelPalette ? UnityEngine.Random.Range(0.25f, 0.45f) : UnityEngine.Random.Range(0.65f, 0.95f);
+        float value = usePastelPalette ? UnityEngine.Random.Range(0.85f, 1f) : UnityEngine.Random.Range(0.55f, 0.9f);
+        return Color.HSVToRGB(hue, saturation, value);
+    }
+
+    private Color GenerateContrastingColor(Color referenceColor, bool referenceIsPastel) {
+        Color.RGBToHSV(referenceColor, out float baseHue, out float baseSaturation, out float baseValue);
+
+        float hueDelta = UnityEngine.Random.Range(MinHueContrast, MaxHueContrast);
+        if (UnityEngine.Random.value < 0.5f) {
+            hueDelta = -hueDelta;
+        }
+        float newHue = Mathf.Repeat(baseHue + hueDelta, 1f);
+
+        float newSaturation;
+        float newValue;
+        if (referenceIsPastel) {
+            newSaturation = UnityEngine.Random.Range(0.65f, 1f);
+            newValue = UnityEngine.Random.Range(0.35f, 0.65f);
+        } else {
+            newSaturation = UnityEngine.Random.Range(0.2f, 0.5f);
+            newValue = UnityEngine.Random.Range(0.8f, 1f);
+        }
+
+        return Color.HSVToRGB(newHue, newSaturation, newValue);
+    }
+
+    private HashSet<int> BuildSequentialIndexSet(int total) {
+        HashSet<int> indices = new HashSet<int>();
+        for (int i = 0; i < total; i++) {
+            indices.Add(i);
+        }
+        return indices;
+    }
+
+    private HashSet<int> BuildRandomIndexSet(int total, int desiredCount) {
+        desiredCount = Mathf.Clamp(desiredCount, 1, total);
+        HashSet<int> indices = new HashSet<int>();
+        while (indices.Count < desiredCount) {
+            indices.Add(UnityEngine.Random.Range(0, total));
+        }
+        return indices;
     }
 }

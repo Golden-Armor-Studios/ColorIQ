@@ -1,0 +1,17 @@
+version: 2
+tpsheetFileNames:
+- Assets/codeandweb.com/Example/SpriteSheet/sprites.tpsheet
+- Assets/Resources/Sprites/Level_2_Press.tpsheet
+- Assets/Resources/Sprites/Level_2_Sprite.tpsheet
+- Assets/Resources/Sprites/Level_2_Tile.tpsheet
+textureFileNames:
+- Assets/codeandweb.com/Example/SpriteSheet/sprites.png
+- Assets/Resources/Sprites/Level_2_Press.png
+- Assets/Resources/Sprites/Level_2_Sprite.png
+- Assets/Resources/Sprites/Level_2_Tile.png
+normalmapFileNames:
+- Assets/codeandweb.com/Example/SpriteSheet/sprites_n.png
+- 
+- 
+- 
+enableDebugOutput: 0

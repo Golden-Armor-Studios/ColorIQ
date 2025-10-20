@@ -9,6 +9,8 @@ using UnityEngine.Rendering;
 
 public class GameController : MonoBehaviour
 {
+    private const string ScorePrefKey = "ShareIQScore";
+
     GameBoard gameBoard;
     GameObject ScoreIQ;
     GameObject PlayAgain;
@@ -16,24 +18,21 @@ public class GameController : MonoBehaviour
     GameObject ShareIQCanvas;
     Canvas ShareIQCanvasSR;
     Text ScoreIQText;
-    float TimeLeft = 60f;
+    float TimeLeft = 60.0f;
+    bool bonusTileSpawned = false;
+    bool isGameOver = false;
+    bool isLoadingShareScene = false;
 
     GameObject timer;
-    Text text;
+    Text timerText;
 
     GameObject score;
 
     Text scoreText;
+    Button shareButton;
+    Button playAgainButton;
 
-    GameObject background;
 
-    SpriteRenderer backgroundSR;
-
-    float lerpCount;
-
-    Color lerpOneColor;
-    Color lerpTwoColor;
-    
     void Start()
     {
         ScoreIQ = GameObject.Find("IQScore");
@@ -41,59 +40,82 @@ public class GameController : MonoBehaviour
         Share = GameObject.Find("Share");
         ShareIQCanvas = GameObject.Find("ShareIQCanvas");
         ScoreIQText = ScoreIQ.GetComponent<Text>();
-        Button PlayAgainButton = PlayAgain.GetComponent<Button>();
-        Button ShareSRButton = Share.GetComponent<Button>();
-        ShareSRButton.enabled = false;
+        playAgainButton = PlayAgain.GetComponent<Button>();
+        shareButton = Share.GetComponent<Button>();
+        if (shareButton != null)
+        {
+            shareButton.enabled = false;
+            shareButton.interactable = false;
+            shareButton.gameObject.SetActive(false);
+        }
         ShareIQCanvasSR = ShareIQCanvas.GetComponent<Canvas>();
-        PlayAgainButton.onClick.AddListener(delegate { playAgain(); });
-        ShareSRButton.onClick.AddListener(delegate { StartCoroutine(LoadScene()); });
+        if (ShareIQCanvasSR != null)
+        {
+            ShareIQCanvasSR.enabled = false;
+        }
+        playAgainButton.onClick.AddListener(delegate { playAgain(); });
+        if (shareButton != null)
+        {
+            shareButton.onClick.AddListener(LoadShareScene);
+        }
         gameBoard = new GameBoard(this);
         gameBoard.buildGameBoard();
+        bonusTileSpawned = false;
         timer = GameObject.Find("Timer");
         score = GameObject.Find("Score");
-        text = timer.GetComponent<Text>();
+        timerText = timer.GetComponent<Text>();
         scoreText = score.GetComponent<Text>();
-        background = GameObject.Find("Background");
-        backgroundSR = background.GetComponent<SpriteRenderer>();
-        lerpCount = 0;
-        lerpOneColor = UnityEngine.Random.ColorHSV(0f, 1f, 1f, 1f, .5f, 1f);
-        lerpTwoColor = UnityEngine.Random.ColorHSV(0f, 1f, 1f, 1f, .5f, 1f);
     }
 
     
     void Update()
     {   
-        
-        TimeLeft -= Time.deltaTime;
-        gameBoard.setTime(TimeLeft);
-        text.text = Math.Floor(TimeLeft).ToString();
-        lerpCount += Time.deltaTime * 20;
-        if (TimeLeft <= 0.0f) {
-            ShareIQCanvasSR.enabled = true;
-            gameBoard.removeGamePieces();
+        if (isGameOver)
+        {
+            return;
         }
-        TimeLeft = gameBoard.getTime();
+
+        TimeLeft -= Time.deltaTime;
+        if (TimeLeft < 0.0f)
+        {
+            TimeLeft = 0.0f;
+        }
+        timerText.text = Math.Floor(TimeLeft).ToString();
+        if (TimeLeft <= 0.0f) {
+            EndGame();
+            return;
+        }
         scoreText.text = gameBoard.getScore().ToString();
         ScoreIQText.text = gameBoard.getScore().ToString();
-        // Background flashy effec t on level up
-        // if (gameBoard.getScore() % 10 == 0 && lerpCount >= 1) {
-        //     lerpOneColor = lerpTwoColor;
-        //     lerpTwoColor = UnityEngine.Random.ColorHSV(0f, 1f, 1f, 1f, .5f, 1f);
-        //     lerpCount = 0;
-        // } else if( gameBoard.getScore() % 10 == 0 && lerpCount <= 1 && gameBoard.getScore() != 0) {
-        //     backgroundSR.color = Color.Lerp(lerpOneColor, lerpTwoColor, lerpCount);
-        // } else {
-        //     backgroundSR.color = Color.clear;
-        // }
+
+        /* Temporarily disabled: late-round Level 2 tile spawn.
+        if (gameBoard != null) {
+            if (!bonusTileSpawned && TimeLeft <= 5.0f && TimeLeft > 0.0f) {
+                if (gameBoard.SpawnBonusTile()) {
+                    bonusTileSpawned = true;
+                }
+            } else if (bonusTileSpawned && !gameBoard.HasActiveBonusTile()) {
+                bonusTileSpawned = false;
+            }
+        }
+        */
+
         if (Input.touchCount >= 1) {
             if( Input.touches[0].phase == TouchPhase.Began ){
-
                 RaycastHit2D hit = Physics2D.Raycast(Camera.main.ScreenToWorldPoint(Input.touches[0].position), Vector2.zero);
                 if(hit.collider) {
-                    gameBoard.addPoints(hit.collider.gameObject.name, hit);
+                    gameBoard.addPoints(hit.collider.gameObject.name, hit, setTime);
                 }  
             }
         }
+    }
+
+    public void setTime(float timeAdded){
+        TimeLeft = TimeLeft + timeAdded;
+    }
+
+    public float getTime(){
+        return TimeLeft;
     }
 
     void playAgain() {
@@ -103,13 +125,49 @@ public class GameController : MonoBehaviour
         ScoreIQText.text = "0";
         gameBoard = new GameBoard(this);
         gameBoard.buildGameBoard();
+        bonusTileSpawned = false;
+        isGameOver = false;
+        isLoadingShareScene = false;
+        if (shareButton != null)
+        {
+            shareButton.enabled = false;
+            shareButton.interactable = false;
+            shareButton.gameObject.SetActive(false);
+        }
     }
 
-    IEnumerator LoadScene() {
+    void LoadShareScene() {
+        if (isLoadingShareScene) {
+            return;
+        }
+
+        SaveScore();
+        isLoadingShareScene = true;
+        StartCoroutine(LoadShareSceneAsync());
+    }
+
+    IEnumerator LoadShareSceneAsync() {
         AsyncOperation loadScene = SceneManager.LoadSceneAsync("ShareIQScene");
         while(!loadScene.isDone) {
             yield return null;
         }
     }
-    
+
+    void EndGame() {
+        if (isGameOver) {
+            return;
+        }
+
+        TimeLeft = 0.0f;
+        timerText.text = "0";
+        isGameOver = true;
+        gameBoard.removeGamePieces();
+        LoadShareScene();
+    }
+
+    void SaveScore() {
+        int scoreValue = gameBoard != null ? gameBoard.getScore() : 0;
+        PlayerPrefs.SetInt(ScorePrefKey, scoreValue);
+        PlayerPrefs.Save();
+    }
 }
